@@ -1,0 +1,256 @@
+Resources:
+  DataBucketE3889A50:
+    Type: AWS::S3::Bucket
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Metadata:
+      aws:cdk:path: S3UploadNotifierStack/DataBucket/Resource
+  DataBucketNotifications11EB1C2E:
+    Type: Custom::S3BucketNotifications
+    Properties:
+      ServiceToken:
+        Fn::GetAtt:
+          - BucketNotificationsHandler050a0587b7544547bf325f094a3db8347ECC3691
+          - Arn
+      BucketName:
+        Ref: DataBucketE3889A50
+      NotificationConfiguration:
+        TopicConfigurations:
+          - Events:
+              - s3:ObjectCreated:*
+            TopicArn:
+              Ref: TopicBFC7AF6E
+    DependsOn:
+      - TopicPolicyA1747468
+      - TopicBFC7AF6E
+      - TopicTokenSubscription178F3F75E
+    Metadata:
+      aws:cdk:path: S3UploadNotifierStack/DataBucket/Notifications/Resource
+  TopicBFC7AF6E:
+    Type: AWS::SNS::Topic
+    Metadata:
+      aws:cdk:path: S3UploadNotifierStack/Topic/Resource
+  TopicPolicyA1747468:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: sns:Publish
+            Condition:
+              ArnLike:
+                aws:SourceArn:
+                  Fn::GetAtt:
+                    - DataBucketE3889A50
+                    - Arn
+            Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Resource:
+              Ref: TopicBFC7AF6E
+            Sid: "0"
+        Version: "2012-10-17"
+      Topics:
+        - Ref: TopicBFC7AF6E
+    Metadata:
+      aws:cdk:path: S3UploadNotifierStack/Topic/Policy/Resource
+  TopicTokenSubscription178F3F75E:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn:
+        Ref: TopicBFC7AF6E
+      Endpoint:
+        Ref: subscriptionEmail
+    Metadata:
+      aws:cdk:path: S3UploadNotifierStack/Topic/TokenSubscription:1/Resource
+  BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - Fn::Join:
+            - ""
+            - - "arn:"
+              - Ref: AWS::Partition
+              - :iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+    Metadata:
+      aws:cdk:path: S3UploadNotifierStack/BucketNotificationsHandler050a0587b7544547bf325f094a3db834/Role/Resource
+  BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleDefaultPolicy2CF63D36:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: s3:PutBucketNotification
+            Effect: Allow
+            Resource: "*"
+        Version: "2012-10-17"
+      PolicyName: BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleDefaultPolicy2CF63D36
+      Roles:
+        - Ref: BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC
+    Metadata:
+      aws:cdk:path: S3UploadNotifierStack/BucketNotificationsHandler050a0587b7544547bf325f094a3db834/Role/DefaultPolicy/Resource
+  BucketNotificationsHandler050a0587b7544547bf325f094a3db8347ECC3691:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: AWS CloudFormation handler for "Custom::S3BucketNotifications" resources (@aws-cdk/aws-s3)
+      Code:
+        ZipFile: >-
+          exports.handler = (event, context) => {
+              // eslint-disable-next-line @typescript-eslint/no-require-imports, import/no-extraneous-dependencies
+              const s3 = new (require('aws-sdk').S3)();
+              // eslint-disable-next-line @typescript-eslint/no-require-imports
+              const https = require('https');
+              // eslint-disable-next-line @typescript-eslint/no-require-imports
+              const url = require('url');
+              log(JSON.stringify(event, undefined, 2));
+              const props = event.ResourceProperties;
+              if (event.RequestType === 'Delete') {
+                  props.NotificationConfiguration = {}; // this is how you clean out notifications
+              }
+              const req = {
+                  Bucket: props.BucketName,
+                  NotificationConfiguration: props.NotificationConfiguration,
+              };
+              return s3.putBucketNotificationConfiguration(req, (err, data) => {
+                  log({ err, data });
+                  if (err) {
+                      return submitResponse('FAILED', err.message + `\nMore information in CloudWatch Log Stream: ${context.logStreamName}`);
+                  }
+                  else {
+                      return submitResponse('SUCCESS');
+                  }
+              });
+              function log(obj) {
+                  console.error(event.RequestId, event.StackId, event.LogicalResourceId, obj);
+              }
+              // eslint-disable-next-line max-len
+              // adapted from https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-lambda-function-code.html#cfn-lambda-function-code-cfnresponsemodule
+              // to allow sending an error messge as a reason.
+              function submitResponse(responseStatus, reason) {
+                  const responseBody = JSON.stringify({
+                      Status: responseStatus,
+                      Reason: reason || 'See the details in CloudWatch Log Stream: ' + context.logStreamName,
+                      PhysicalResourceId: event.PhysicalResourceId || event.LogicalResourceId,
+                      StackId: event.StackId,
+                      RequestId: event.RequestId,
+                      LogicalResourceId: event.LogicalResourceId,
+                      NoEcho: false,
+                  });
+                  log({ responseBody });
+                  const parsedUrl = url.parse(event.ResponseURL);
+                  const options = {
+                      hostname: parsedUrl.hostname,
+                      port: 443,
+                      path: parsedUrl.path,
+                      method: 'PUT',
+                      headers: {
+                          'content-type': '',
+                          'content-length': responseBody.length,
+                      },
+                  };
+                  const request = https.request(options, (r) => {
+                      log({ statusCode: r.statusCode, statusMessage: r.statusMessage });
+                      context.done();
+                  });
+                  request.on('error', (error) => {
+                      log({ sendError: error });
+                      context.done();
+                  });
+                  request.write(responseBody);
+                  request.end();
+              }
+          };
+      Handler: index.handler
+      Role:
+        Fn::GetAtt:
+          - BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC
+          - Arn
+      Runtime: nodejs10.x
+      Timeout: 300
+    DependsOn:
+      - BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleDefaultPolicy2CF63D36
+      - BucketNotificationsHandler050a0587b7544547bf325f094a3db834RoleB6FB88EC
+    Metadata:
+      aws:cdk:path: S3UploadNotifierStack/BucketNotificationsHandler050a0587b7544547bf325f094a3db834/Resource
+  CDKMetadata:
+    Type: AWS::CDK::Metadata
+    Properties:
+      Modules: aws-cdk=1.73.0,@aws-cdk/aws-cloudwatch=1.73.0,@aws-cdk/aws-events=1.73.0,@aws-cdk/aws-iam=1.73.0,@aws-cdk/aws-kms=1.73.0,@aws-cdk/aws-s3=1.73.0,@aws-cdk/aws-s3-notifications=1.73.0,@aws-cdk/aws-sns=1.73.0,@aws-cdk/aws-sns-subscriptions=1.73.0,@aws-cdk/cloud-assembly-schema=1.73.0,@aws-cdk/core=1.73.0,@aws-cdk/cx-api=1.73.0,@aws-cdk/region-info=1.73.0,jsii-runtime=node.js/v14.12.0
+    Metadata:
+      aws:cdk:path: S3UploadNotifierStack/CDKMetadata/Default
+    Condition: CDKMetadataAvailable
+Parameters:
+  subscriptionEmail:
+    Type: String
+Conditions:
+  CDKMetadataAvailable:
+    Fn::Or:
+      - Fn::Or:
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - ap-east-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - ap-northeast-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - ap-northeast-2
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - ap-south-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - ap-southeast-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - ap-southeast-2
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - ca-central-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - cn-north-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - cn-northwest-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - eu-central-1
+      - Fn::Or:
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - eu-north-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - eu-west-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - eu-west-2
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - eu-west-3
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - me-south-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - sa-east-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - us-east-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - us-east-2
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - us-west-1
+          - Fn::Equals:
+              - Ref: AWS::Region
+              - us-west-2
+
